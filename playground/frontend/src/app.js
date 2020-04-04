@@ -9,13 +9,13 @@ import {
   TextField,
   Grid,
 } from '@material-ui/core';
-import RunIcon from '@material-ui/icons/DoubleArrow';
-
 import ResultsTable from './components/resultstable';
+import Console from './components/console';
+import Icon from './components/icon';
 
 const deSerializeError = obj => Object.assign(new Error(), { stack: undefined }, obj);
 
-const socket = socketIOClient('http://localhost:3000');
+const socket = socketIOClient(window.location.origin);
 
 class App extends React.Component {
   constructor() {
@@ -27,6 +27,7 @@ class App extends React.Component {
       username: null,
       password: null,
       results: [],
+      logs: [],
     };
   }
 
@@ -37,7 +38,7 @@ class App extends React.Component {
     if (!socket.connected) { return; }
     if (!selectedIntegration) { return; }
 
-    console.log(`Running ${selectedIntegration.value}..`);
+    console.log(`Running ${selectedIntegration}..`);
     socket.emit('run', {
       sourceIdentifier: selectedIntegration,
       username,
@@ -70,6 +71,9 @@ class App extends React.Component {
             console.log(log.obj);
         }
       });
+      this.setState(prevState => ({
+        logs: [...prevState.logs, ...logs],
+      }));
       console.log('############### END EXECUTION LOGS ###############');
     });
     socket.on('runResults', (results) => {
@@ -100,6 +104,13 @@ class App extends React.Component {
   handleChange = (event) => {
     this.setState({
       selectedIntegration: event.target.value,
+      logs: [],
+    });
+  }
+
+  handleClearLogs = () => {
+    this.setState({
+      logs: [],
     });
   }
 
@@ -109,21 +120,29 @@ class App extends React.Component {
       integrations,
       selectedIntegration,
       results,
+      logs,
     } = this.state;
     return (
       <div className="App">
         <header className="App-header">
-          <h2>Tomorrow App Playground</h2>
-          <p>status: <span id="connection-state">{connection}</span></p>
+          <h2>North App Playground</h2>
+          <p>
+            status:
+            {' '}
+            <span id="connection-state">{connection}</span>
+          </p>
         </header>
         <div className="main-content-container">
           <Grid container spacing={4}>
             <Grid item xs={3}>
               <h3>How to test an integration</h3>
               <p>
-                  1/ Select an integration<br />
-                  2/ Fill out username/password if needed<br />
-                  3/ Open Chrome console to see results (any change in any field will trigger a re-run)<br />
+                  1/ Select an integration
+                <br />
+                  2/ Fill out username/password if needed
+                <br />
+                  3/ Open Chrome console to see results (any change in any field will trigger a re-run)
+                <br />
               </p>
               <FormControl
                 style={{ width: '100%' }}
@@ -135,8 +154,8 @@ class App extends React.Component {
                   displayEmpty
                   onChange={this.handleChange}
                 >
-                  {integrations.map(integration => (
-                    <MenuItem key={integration} value={integration}>{integration}</MenuItem> 
+                  {integrations.sort().map(integration => (
+                    <MenuItem key={integration} value={integration}>{integration}</MenuItem>
                   ))}
                 </Select>
                 <TextField
@@ -164,12 +183,16 @@ class App extends React.Component {
                   style={{ marginTop: '16px' }}
                 >
                   Run
-                  <RunIcon />
+                  {' '}
+                  <Icon type="double-arrow" />
                 </Button>
               </FormControl>
             </Grid>
             <Grid item xs={9}>
               <ResultsTable data={results} />
+            </Grid>
+            <Grid item xs={12}>
+              <Console logs={logs} onClearLogs={this.handleClearLogs} />
             </Grid>
           </Grid>
         </div>

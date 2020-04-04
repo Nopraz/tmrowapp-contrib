@@ -4,6 +4,7 @@ import groupBy from 'lodash/groupBy';
 
 import { ACTIVITY_TYPE_ELECTRICITY } from '../../definitions';
 import { AuthenticationError, HTTPError } from '../utils/errors';
+import { getActivityDurationHours } from '../../co2eq/utils';
 
 const btoa = b => Buffer.from(b).toString('base64');
 
@@ -57,16 +58,35 @@ async function getUser(username, password) {
   if (!(password || '').length) {
     throw Error('Password cannot be empty');
   }
-  return request(username, password, 'co.getbarry.megatron.controller.UserController.get', [username]);
+  return request(username, password, 'co.getbarry.megatron.controller.UserController.get', []);
 }
 async function getMeteringPointAssociated(username, password, customerId) {
-  return request(username, password, 'co.getbarry.megatron.controller.MeteringPointAssociationController.findByCustomerId', [customerId]);
+  return request(
+    username,
+    password,
+    'co.getbarry.megatron.controller.MeteringPointAssociationController.findByCustomerId',
+    [customerId]
+  );
 }
 async function getRegion(username, password, meteringPointId) {
-  return request(username, password, 'co.getbarry.megatron.controller.PriceController.getRegion', [meteringPointId]);
+  return request(username, password, 'co.getbarry.megatron.controller.PriceController.getRegion', [
+    meteringPointId,
+  ]);
 }
-async function getHourlyConsumption(username, password, meteringPointId, fromISO, toISO) {
-  return request(username, password, 'co.getbarry.megatron.controller.ConsumptionController.getHourlyConsumption', [[meteringPointId], fromISO, toISO]);
+async function getHourlyConsumption(
+  username,
+  password,
+  customerId,
+  meteringPointId,
+  fromISO,
+  toISO
+) {
+  return request(
+    username,
+    password,
+    'co.getbarry.megatron.controller.ConsumptionController.getHourlyConsumption',
+    [customerId, [meteringPointId], fromISO, toISO]
+  );
 }
 
 async function connect(requestLogin, requestWebView) {
@@ -93,9 +113,9 @@ async function connect(requestLogin, requestWebView) {
     password,
     meteringPointId,
     priceRegion,
+    customerId,
   };
 }
-
 
 function disconnect() {
   // Here we should do any cleanup (deleting tokens etc..)
@@ -103,16 +123,26 @@ function disconnect() {
 }
 
 async function collect(state, { logWarning }) {
-  const {
-    username, password, meteringPointId, priceRegion,
-  } = state;
+  const { username, password, meteringPointId, priceRegion } = state;
 
-  const startDate = state.lastFullyCollectedDay || moment().subtract(1, 'month').toISOString();
+  // Try to see if customerId was present in state
+  // (in older version it wasn't)
+  const customerId = state.customerId || (await getUser(username, password)).customerId;
+
+  const startDate =
+    state.lastFullyCollectedDay ||
+    moment()
+      .subtract(1, 'month')
+      .toISOString();
   const endDate = moment().toISOString();
 
   const response = await getHourlyConsumption(
-    username, password, meteringPointId,
-    startDate, endDate,
+    username,
+    password,
+    customerId,
+    meteringPointId,
+    startDate,
+    endDate
   );
 
   // Note: some entries contain more than 24 values.
@@ -126,22 +156,34 @@ async function collect(state, { logWarning }) {
     We should probably use local time to define days
   */
 
-  const activities = Object.entries(groupBy(response, d => moment(d.date).startOf('day').toISOString()))
-    .map(([k, values]) => ({
-      id: `barry${k}`,
-      datetime: moment(k).toDate(),
-      activityType: ACTIVITY_TYPE_ELECTRICITY,
-      energyWattHours: values
-        .map(x => x.value * 1000.0) // kWh -> Wh
-        .reduce((a, b) => a + b, 0),
-      durationHours: values.length,
-      hourlyEnergyWattHours: values.map(x => x.value * 1000.0),
-      locationLon,
-      locationLat,
-    }));
+  const activities = Object.entries(
+    groupBy(response, d =>
+      moment(d.date)
+        .startOf('day')
+        .toISOString()
+    )
+  ).map(([k, values]) => ({
+    id: `barry${k}`,
+    datetime: moment(k).toDate(),
+    endDatetime: moment(k)
+      .add(values.length, 'hours')
+      .toDate(),
+    activityType: ACTIVITY_TYPE_ELECTRICITY,
+    energyWattHours: values
+      .map(x => x.value * 1000.0) // kWh -> Wh
+      .reduce((a, b) => a + b, 0),
+    hourlyEnergyWattHours: values.map(x => x.value * 1000.0),
+    locationLon,
+    locationLat,
+  }));
   activities
-    .filter(d => d.durationHours !== 24)
-    .forEach(d => logWarning(`Ignoring activity from ${d.datetime.toISOString()} with ${d.durationHours} hours instead of 24`));
+    .filter(d => getActivityDurationHours(d) !== 24)
+    .forEach(d =>
+      logWarning(
+        `Ignoring activity from ${d.datetime.toISOString()} 
+        to ${d.endDatetime.toISOString()} as not 24 hours`
+      )
+    );
 
   if (!activities.length) {
     return { activities: [] };
@@ -149,11 +191,12 @@ async function collect(state, { logWarning }) {
 
   // Subtract one day to make sure we always have a full day
   const lastFullyCollectedDay = moment(activities[activities.length - 1].datetime)
-    .subtract(1, 'day').toISOString();
+    .subtract(1, 'day')
+    .toISOString();
 
   return {
     activities: activities.filter(d => d.durationHours === 24),
-    state: { ...state, lastFullyCollectedDay },
+    state: { ...state, customerId, lastFullyCollectedDay },
   };
 }
 

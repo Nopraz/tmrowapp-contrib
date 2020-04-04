@@ -1,6 +1,7 @@
 import moment from 'moment';
 import request from 'superagent';
 import { DOMParser } from 'xmldom';
+import { ValidationError } from '../utils/errors';
 
 import { ACTIVITY_TYPE_TRANSPORTATION, TRANSPORTATION_MODE_PUBLIC_TRANSPORT } from '../../definitions';
 
@@ -74,11 +75,11 @@ async function logIn(username, password, logger) {
     } else if (!container) {
       // Note(olc): This happens every 2nd request on Android if the token length is not 92
       // As a result, we're not logged in.
-      throw Error('Unknown error');
+      throw new Error('Unknown error');
     } else {
       const errors = Array.from(container.getElementsByTagName('li'))
         .map(d => d.firstChild.textContent);
-      throw Error(errors.join(', '));
+      throw new ValidationError(errors.join(', '));
     }
   } else if (!res.text.match(/(is logged in|er logget in)/)) {
     // Log more info
@@ -170,13 +171,13 @@ function parseTravels(allTravelsHTML, logger) {
               skipRow = false;
               travelIndex += 1;
               travelList[travelIndex] = {};
-              travelList[travelIndex]['number'] = element.textContent;
+              travelList[travelIndex].number = element.textContent;
             }
           }
         }
         if (!skipRow) {
           if (e === 2) {
-            travelList[travelIndex]['date'] = element.textContent;
+            travelList[travelIndex].date = element.textContent;
           }
           if (e === 3) {
             travelList[travelIndex]['start-time'] = element.textContent;
@@ -198,8 +199,8 @@ function parseTravels(allTravelsHTML, logger) {
   // Change data format for Greenbit
   const activities = [];
   for (let a = 0; a < travelList.length; a += 1) {
-    const splitToken = travelList[a]['date'].indexOf('-') !== -1 ? '-' : '/';
-    const dateSplit = travelList[a]['date'].split(splitToken);
+    const splitToken = travelList[a].date.indexOf('-') !== -1 ? '-' : '/';
+    const dateSplit = travelList[a].date.split(splitToken);
     const startTime = new Date(`20${dateSplit[2]}-${dateSplit[1]}-${dateSplit[0]}T${travelList[a]['start-time']}`);
     const endStr = `20${dateSplit[2]}-${dateSplit[1]}-${dateSplit[0]}T${travelList[a]['end-time']}`;
     let endTime = new Date(endStr);
@@ -215,11 +216,11 @@ function parseTravels(allTravelsHTML, logger) {
     }
 
     activities.push({
-      id: `rejsekort${travelList[a]['number']}`,
+      id: `rejsekort${travelList[a].number}`,
       datetime: endTime,
-      activityType: ACTIVITY_TYPE_TRANSPORTATION,
       // this currently only works for travels within the same date
-      durationHours: (endTime.getTime() - startTime.getTime()) / 3600000,
+      endDatetime: new Date(endTime.getTime() + (endTime.getTime() - startTime.getTime())),
+      activityType: ACTIVITY_TYPE_TRANSPORTATION,
       transportationMode: TRANSPORTATION_MODE_PUBLIC_TRANSPORT,
       departureStation: travelList[a]['start-station'].replace('Line : ', ''),
       destinationStation: travelList[a]['end-station'].replace('Line : ', ''),
